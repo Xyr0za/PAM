@@ -9,48 +9,29 @@ struct Row {
     value: u64,
 }
 
-const ITERS: usize = 1_000_000_000;
-
-/// Lexicographically compare two u64 keys as DNA sequences (2 bits per base).
-/// Returns:
-/// -1 if a < b
-///  0 if a == b
-///  1 if a > b
-fn lex_compare_dna_bits(a: u64, b: u64) -> i8 {
-    // 64 bits, 2 bits per base => 32 bases total
-    // compare from MSB to LSB, 2 bits at a time
+// Convert a 64-bit integer into a 32-base DNA sequence string (A, C, G, T)
+fn u64_to_acgt(num: u64) -> String {
+    let mut result = String::with_capacity(32);
     for i in (0..32).rev() {
-        let shift = i * 2;
-        let a_chunk = (a >> shift) & 0b11;
-        let b_chunk = (b >> shift) & 0b11;
-        if a_chunk < b_chunk {
-            return -1;
-        } else if a_chunk > b_chunk {
-            return 1;
-        }
+        let bits = (num >> (i * 2)) & 0b11;
+        let base = match bits {
+            0b00 => 'A',
+            0b01 => 'C',
+            0b10 => 'G',
+            0b11 => 'T',
+            _ => unreachable!(),
+        };
+        result.push(base);
     }
-    0
+    result
 }
 
-/// Binary search for `target` in a sorted slice of Rows by DNA lex order key.
-/// Returns Some(index) if found, None otherwise.
-// fn binary_search_dna(rows: &[Row], target: u64) -> Option<usize> {
-//     let mut low = 0;
-//     let mut high = rows.len();
-//
-//     while low < high {
-//         let mid = (low + high) / 2;
-//         match lex_compare_dna_bits(rows[mid].key, target) {
-//             0 => return Some(mid),
-//             cmp if cmp < 0 => low = mid + 1,
-//             _ => high = mid,
-//         }
-//     }
-//     None
-// }
+const MAX_ITERS: usize = 1_000_000_000;
 
-
+// Binary search for a target key in a sorted slice of Rows
 fn binary_search_dna(rows: &[Row], target: u64) -> Option<usize> {
+    println!("{}", MAX_ITERS);
+
     let mut low = 0;
     let mut high = rows.len();
 
@@ -65,61 +46,38 @@ fn binary_search_dna(rows: &[Row], target: u64) -> Option<usize> {
     None
 }
 
-
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
-    let mut file = BufReader::with_capacity(32 * 1024 * 1024, File::open(&args[1])?);
+    if args.len() < 3 {
+        eprintln!("Usage: {} <file_path> <search_term>", args[0]);
+        std::process::exit(1);
+    }
 
-    let search_term: u64 = args[2].parse().unwrap();
+    let file_path = &args[1];
+    let search_term: u64 = args[2].parse().expect("Invalid search term");
 
-    let mut rows = Vec::with_capacity(ITERS);
+    let file = File::open(file_path)?;
+    let mut reader = BufReader::with_capacity(32 * 1024 * 1024, file);
+
+    let mut rows = Vec::with_capacity(MAX_ITERS);
     let mut buf = [0u8; 16];
 
     let start = Instant::now();
 
-    let mut i = 0;
-    while file.read_exact(&mut buf).is_ok() {
-        if i >= ITERS {
+    for _ in 0..MAX_ITERS {
+        if reader.read_exact(&mut buf).is_err() {
             break;
         }
-
         let key = u64::from_le_bytes(buf[0..8].try_into().unwrap());
         let value = u64::from_le_bytes(buf[8..16].try_into().unwrap());
         rows.push(Row { key, value });
-        i += 1;
     }
 
+    println!("Time elapsed loading data: {:?}", start.elapsed());
+    println!("Searching for: {}", u64_to_acgt(search_term));
 
-    // println!("First few entries:");
-    // for row in rows.iter() {
-    //     let dna = row.key;
-    //     println!(
-    //         "{:064b} {} {:064b}",
-    //         dna,
-    //         dna,
-    //         row.value
-    //     );
-    // }
-
-    rows.sort_by(|a, b| {
-        let cmp = lex_compare_dna_bits(a.key, b.key);
-        cmp.cmp(&0) // converts i8 to std::cmp::Ordering
-    });
-
-    let duration = start.elapsed();
-    println!("Time elapsed: {:?}", duration);
-
-    // println!("First few 'sorted' entries:");
-    // for row in rows.iter() {
-    //     let dna = row.key;
-    //     println!(
-    //         "{:064b} {} {:064b}",
-    //         dna,
-    //         dna,
-    //         row.value
-    //     );
-    // }
+    let match_start = Instant::now();
 
     match binary_search_dna(&rows, search_term) {
         Some(idx) => {
@@ -129,6 +87,8 @@ fn main() -> std::io::Result<()> {
             println!("Key not found");
         }
     }
+
+    println!("Time elapsed matching data: {:?}", match_start.elapsed());
 
     Ok(())
 }
