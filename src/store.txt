@@ -1,0 +1,95 @@
+use std::fs::File;
+use memmap2::Mmap;
+use rayon::prelude::*;
+use std::io;
+
+#[derive(Debug)]
+struct Row {
+    key: u64,
+    value: u64,
+}
+
+// Convert a 64-bit integer into a 32-base DNA sequence string (A, C, G, T)
+fn u64_to_acgt(num: u64) -> String {
+    let mut result = String::with_capacity(32);
+    for i in (0..32).rev() {
+        let bits = (num >> (i * 2)) & 0b11;
+        let base = match bits {
+            0b00 => 'A',
+            0b01 => 'C',
+            0b10 => 'G',
+            0b11 => 'T',
+            _ => unreachable!(),
+        };
+        result.push(base);
+    }
+    result
+}
+
+const MAX_ITERS: usize = 1_000_000_000;
+
+// Binary search for a target key in a sorted slice of Rows
+fn binary_search_dna(rows: &[Row], target: u64) -> Option<usize> {
+    println!("{}", MAX_ITERS);
+
+    let mut low = 0;
+    let mut high = rows.len();
+
+    while low < high {
+        let mid = (low + high) / 2;
+        match rows[mid].key.cmp(&target) {
+            std::cmp::Ordering::Equal => return Some(mid),
+            std::cmp::Ordering::Less => low = mid + 1,
+            std::cmp::Ordering::Greater => high = mid,
+        }
+    }
+    None
+}
+
+
+// Keep your existing u64_to_acgt and binary_search_dna here...
+
+fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() < 3 {
+        eprintln!("Usage: {} <file_path> <search_term>", args[0]);
+        std::process::exit(1);
+    }
+
+    let file_path = &args[1];
+    let search_term: u64 = args[2].parse().expect("Invalid search term");
+
+    // Open file and mmap
+    let file = File::open(file_path)?;
+    let mmap = unsafe { Mmap::map(&file)? };
+
+    // Check file length divisible by 16 bytes
+    if mmap.len() % 16 != 0 {
+        eprintln!("File length not divisible by record size (16 bytes)");
+        std::process::exit(1);
+    }
+
+    // Parse rows in parallel using rayon
+    let rows: Vec<Row> = mmap.par_chunks_exact(16)
+        .map(|chunk| {
+            let key = u64::from_le_bytes(chunk[0..8].try_into().unwrap());
+            let value = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+            Row { key, value }
+        })
+        .collect();
+
+    println!("Loaded {} rows", rows.len());
+    println!("Searching for: {}", u64_to_acgt(search_term));
+
+    let match_start = std::time::Instant::now();
+
+    match binary_search_dna(&rows, search_term) {
+        Some(idx) => println!("Found key at index {}: {:?}", idx, rows[idx]),
+        None => println!("Key not found"),
+    }
+
+    println!("Time elapsed matching data: {:?}", match_start.elapsed());
+
+    Ok(())
+}

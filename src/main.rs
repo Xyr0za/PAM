@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, BufRead, Read};
 use std::time::Instant;
 
 #[derive(Debug)]
@@ -26,12 +26,8 @@ fn u64_to_acgt(num: u64) -> String {
     result
 }
 
-const MAX_ITERS: usize = 1_000_000_000;
-
 // Binary search for a target key in a sorted slice of Rows
 fn binary_search_dna(rows: &[Row], target: u64) -> Option<usize> {
-    println!("{}", MAX_ITERS);
-
     let mut low = 0;
     let mut high = rows.len();
 
@@ -46,49 +42,81 @@ fn binary_search_dna(rows: &[Row], target: u64) -> Option<usize> {
     None
 }
 
+// Read list of u64 search terms from a file (one per line)
+fn read_search_terms(path: &str) -> std::io::Result<Vec<u64>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut terms = Vec::new();
+
+    for (i, line) in reader.lines().enumerate() {
+        let line = line?;
+        match line.trim().parse::<u64>() {
+            Ok(num) => terms.push(num),
+            Err(_) => {
+                eprintln!("Warning: invalid u64 on line {}: '{}'", i + 1, line);
+            }
+        }
+    }
+
+    Ok(terms)
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
-        eprintln!("Usage: {} <file_path> <search_term>", args[0]);
+        eprintln!("Usage: {} <binary_data_file> <search_terms_file>", args[0]);
         std::process::exit(1);
     }
 
-    let file_path = &args[1];
-    let search_term: u64 = args[2].parse().expect("Invalid search term");
+    let binary_file_path = &args[1];
+    let terms_file_path = &args[2];
 
-    let file = File::open(file_path)?;
-    let mut reader = BufReader::with_capacity(32 * 1024 * 1024, file);
+    let file = File::open(binary_file_path)?;
+    let mut reader = BufReader::new(file);
 
-    let mut rows = Vec::with_capacity(MAX_ITERS);
-    let mut buf = [0u8; 16];
+    let load_start = Instant::now();
 
-    let start = Instant::now();
+    // Read the binary file into buffer
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer)?;
 
-    for _ in 0..MAX_ITERS {
-        if reader.read_exact(&mut buf).is_err() {
-            break;
-        }
-        let key = u64::from_le_bytes(buf[0..8].try_into().unwrap());
-        let value = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+    let row_size = 16;
+    if buffer.len() % row_size != 0 {
+        eprintln!("File size is not a multiple of 16 bytes; invalid format.");
+        std::process::exit(1);
+    }
+
+    let num_rows = buffer.len() / row_size;
+    let mut rows = Vec::with_capacity(num_rows);
+    for i in 0..num_rows {
+        let offset = i * row_size;
+        let key = u64::from_le_bytes(buffer[offset..offset + 8].try_into().unwrap());
+        let value = u64::from_le_bytes(buffer[offset + 8..offset + 16].try_into().unwrap());
         rows.push(Row { key, value });
     }
 
-    println!("Time elapsed loading data: {:?}", start.elapsed());
-    println!("Searching for: {}", u64_to_acgt(search_term));
+    println!("Loaded {} rows from '{}'", num_rows, binary_file_path);
+    println!("Time elapsed loading data: {:?}", load_start.elapsed());
 
-    let match_start = Instant::now();
+    let search_terms = read_search_terms(terms_file_path)?;
+    println!("Searching {} terms from '{}'", search_terms.len(), terms_file_path);
 
-    match binary_search_dna(&rows, search_term) {
-        Some(idx) => {
-            println!("Found key at index {}: {:?}", idx, rows[idx]);
-        }
-        None => {
-            println!("Key not found");
+    let search_start = Instant::now();
+
+    for term in search_terms {
+        let acgt = u64_to_acgt(term);
+        match binary_search_dna(&rows, term) {
+            Some(idx) => {
+                println!("✓ FOUND: {} ({}): {:?}", acgt, term, rows[idx]);
+            }
+            None => {
+                println!("✗ NOT FOUND: {} ({})", acgt, term);
+            }
         }
     }
 
-    println!("Time elapsed matching data: {:?}", match_start.elapsed());
+    println!("Time elapsed searching: {:?}", search_start.elapsed());
 
     Ok(())
 }
